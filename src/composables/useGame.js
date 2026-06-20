@@ -15,6 +15,7 @@ export function useGame() {
   const gameOverReason = ref('')
   const actionLog = ref([])
   const digestionQueue = ref([])
+  const dayNightStartTime = ref(Date.now())
 
   const DAY_DURATION = 30000
   const NIGHT_DURATION = 20000
@@ -27,6 +28,7 @@ export function useGame() {
   const FOOD_DIGESTION_STEPS = 4
 
   let dayNightTimer = null
+  let initialDayNightTimer = null
   let nightConsumptionTimer = null
   let autoSaveTimer = null
   let hungerTimer = null
@@ -230,6 +232,7 @@ export function useGame() {
 
   function toggleDayNight() {
     isDay.value = !isDay.value
+    dayNightStartTime.value = Date.now()
     if (isDay.value) {
       startDayCycle()
     } else {
@@ -353,9 +356,17 @@ export function useGame() {
   }
 
   function startTimers() {
-    dayNightTimer = setInterval(() => {
+    const totalDuration = isDay.value ? DAY_DURATION : NIGHT_DURATION
+    const elapsed = Date.now() - dayNightStartTime.value
+    const remaining = Math.max(1000, totalDuration - (elapsed % totalDuration))
+
+    initialDayNightTimer = setTimeout(() => {
       toggleDayNight()
-    }, isDay.value ? DAY_DURATION : NIGHT_DURATION)
+      dayNightTimer = setInterval(() => {
+        toggleDayNight()
+      }, isDay.value ? DAY_DURATION : NIGHT_DURATION)
+      initialDayNightTimer = null
+    }, remaining)
     
     autoSaveTimer = setInterval(() => {
       saveGame('auto')
@@ -369,6 +380,10 @@ export function useGame() {
   }
 
   function stopTimers() {
+    if (initialDayNightTimer) {
+      clearTimeout(initialDayNightTimer)
+      initialDayNightTimer = null
+    }
     if (dayNightTimer) {
       clearInterval(dayNightTimer)
       dayNightTimer = null
@@ -398,16 +413,20 @@ export function useGame() {
       isDay: isDay.value,
       dayCount: dayCount.value,
       isBlizzard: isBlizzard.value,
+      gameOver: gameOver.value,
+      gameOverReason: gameOverReason.value,
+      dayNightStartTime: dayNightStartTime.value,
       savedAt: Date.now()
     }
     localStorage.setItem(`snowSurvival_${slot}`, JSON.stringify(gameState))
-    addLog(`游戏已保存到存档位：${slot === 'auto' ? '自动存档' : slot}`, 'info')
+    if (slot !== 'auto') {
+      addLog(`游戏已保存到存档位：${slot}`, 'info')
+    }
   }
 
   function loadGame(slot = 'auto') {
     const saved = localStorage.getItem(`snowSurvival_${slot}`)
     if (!saved) {
-      addLog('没有找到存档', 'warning')
       return false
     }
     
@@ -424,23 +443,60 @@ export function useGame() {
       isDay.value = gameState.isDay
       dayCount.value = gameState.dayCount
       isBlizzard.value = gameState.isBlizzard
-      gameOver.value = false
-      gameOverReason.value = ''
+      gameOver.value = gameState.gameOver || false
+      gameOverReason.value = gameState.gameOverReason || ''
+      dayNightStartTime.value = gameState.dayNightStartTime || Date.now()
       actionLog.value = []
       
       stopTimers()
-      startTimers()
-      
-      if (!isDay.value) {
-        startNightCycle()
+
+      if (!gameOver.value) {
+        startTimers()
+        if (!isDay.value && !nightConsumptionTimer) {
+          startNightCycle()
+        }
       }
       
-      addLog(`成功加载存档：${slot === 'auto' ? '自动存档' : slot}`, 'success')
+      if (slot !== 'auto') {
+        addLog(`成功加载存档：${slot}`, 'success')
+      }
       return true
     } catch (e) {
       addLog('存档损坏，无法加载', 'danger')
       return false
     }
+  }
+
+  function getAllSaves() {
+    const saves = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i)
+      if (key.startsWith('snowSurvival_')) {
+        const slotName = key.replace('snowSurvival_', '')
+        try {
+          const data = JSON.parse(localStorage.getItem(key))
+          saves.push({
+            name: slotName,
+            savedAt: data.savedAt || 0,
+            gameOver: data.gameOver || false,
+            dayCount: data.dayCount || 1
+          })
+        } catch (e) {}
+      }
+    }
+    return saves.sort((a, b) => b.savedAt - a.savedAt)
+  }
+
+  function loadLatestValidSave() {
+    const saves = getAllSaves()
+    if (saves.length === 0) {
+      return false
+    }
+
+    const validSaves = saves.filter(s => !s.gameOver)
+    const target = validSaves.length > 0 ? validSaves[0] : saves[0]
+    
+    return loadGame(target.name)
   }
 
   function getSaveSlots() {
@@ -482,6 +538,7 @@ export function useGame() {
     gameOver.value = false
     gameOverReason.value = ''
     actionLog.value = []
+    dayNightStartTime.value = Date.now()
     
     stopTimers()
     startTimers()
@@ -490,8 +547,14 @@ export function useGame() {
   }
 
   onMounted(() => {
-    startTimers()
-    addLog('欢迎来到雪地生存！白天收集资源，夜晚保持温暖。', 'info')
+    const loaded = loadLatestValidSave()
+    if (!loaded) {
+      dayNightStartTime.value = Date.now()
+      startTimers()
+      addLog('欢迎来到雪地生存！白天收集资源，夜晚保持温暖。', 'info')
+    } else {
+      addLog('已恢复上次生存进度。', 'info')
+    }
   })
 
   onUnmounted(() => {
