@@ -4,6 +4,13 @@
     <div v-if="isNight" class="night-warning">
       <span>🌙 夜晚无法外出活动，请保持温暖！</span>
     </div>
+    <div v-if="hungerLevel !== 'full'" class="hunger-warning" :class="hungerLevel">
+      <span>
+        <span v-if="hungerLevel === 'hungry'">🍽️ 有点饿了，行动效率下降</span>
+        <span v-else-if="hungerLevel === 'very_hungry'">🍽️ 很饿！体温消耗增加</span>
+        <span v-else-if="hungerLevel === 'starving'">⚠️ 极度饥饿！有生命危险！</span>
+      </span>
+    </div>
     <div class="actions-grid">
       <button 
         class="action-btn" 
@@ -12,7 +19,8 @@
       >
         <span class="btn-icon">🪓</span>
         <span class="btn-text">砍柴</span>
-        <span class="btn-cost">-5 体温</span>
+        <span class="btn-cost">-{{ getAdjustedCost(5) }} 体温</span>
+        <span v-if="actionEfficiency < 1" class="btn-hint efficiency-hint">效率 {{ Math.round(actionEfficiency * 100) }}%</span>
       </button>
       <button 
         class="action-btn" 
@@ -21,8 +29,8 @@
       >
         <span class="btn-icon">🏹</span>
         <span class="btn-text">狩猎</span>
-        <span class="btn-cost">-8 体温</span>
-        <span class="btn-hint">成功率: {{ Math.round(huntRate * 100) }}%</span>
+        <span class="btn-cost">-{{ getAdjustedCost(8) }} 体温</span>
+        <span class="btn-hint">成功率: {{ Math.round(huntRate * actionEfficiency * 100) }}%</span>
       </button>
       <button 
         class="action-btn" 
@@ -31,7 +39,7 @@
       >
         <span class="btn-icon">🔨</span>
         <span class="btn-text">制作工具</span>
-        <span class="btn-cost">-6 体温</span>
+        <span class="btn-cost">-{{ getAdjustedCost(6) }} 体温</span>
         <span class="btn-hint">需要: 2🪵 + 1🦊</span>
       </button>
       <button 
@@ -52,23 +60,30 @@
         <span class="btn-icon">🍖</span>
         <span class="btn-text">进食</span>
         <span class="btn-cost">-1 食物</span>
-        <span class="btn-hint">+5~15 体温</span>
+        <span class="btn-hint">缓效恢复 +消化中</span>
       </button>
     </div>
   </div>
 </template>
 
 <script setup>
-defineProps({
+const props = defineProps({
   isNight: { type: Boolean, default: false },
   gameOver: { type: Boolean, default: false },
   canFire: { type: Boolean, default: false },
   canCraft: { type: Boolean, default: false },
   huntRate: { type: Number, default: 0.3 },
-  food: { type: Number, default: 0 }
+  food: { type: Number, default: 0 },
+  hungerLevel: { type: String, default: 'full' },
+  actionEfficiency: { type: Number, default: 1.0 },
+  tempCostMultiplier: { type: Number, default: 1.0 }
 })
 
 defineEmits(['chop', 'hunt', 'craft', 'fire', 'eat'])
+
+function getAdjustedCost(baseCost) {
+  return Math.round(baseCost * props.tempCostMultiplier)
+}
 </script>
 
 <style scoped>
@@ -97,6 +112,43 @@ defineEmits(['chop', 'hunt', 'craft', 'fire', 'eat'])
   text-align: center;
   color: #a0c4ff;
   font-size: 14px;
+}
+
+.hunger-warning {
+  border-radius: 10px;
+  padding: 10px;
+  margin-bottom: 15px;
+  text-align: center;
+  font-size: 13px;
+  transition: all 0.3s ease;
+}
+
+.hunger-warning.hungry {
+  background: rgba(243, 156, 18, 0.2);
+  border: 1px solid rgba(243, 156, 18, 0.5);
+  color: #f5b041;
+}
+
+.hunger-warning.very_hungry {
+  background: rgba(230, 126, 34, 0.3);
+  border: 1px solid rgba(230, 126, 34, 0.6);
+  color: #f39c12;
+}
+
+.hunger-warning.starving {
+  background: rgba(231, 76, 60, 0.3);
+  border: 1px solid rgba(231, 76, 60, 0.6);
+  color: #ec7063;
+  animation: hungerWarnPulse 1s ease-in-out infinite;
+}
+
+@keyframes hungerWarnPulse {
+  0%, 100% { opacity: 0.8; }
+  50% { opacity: 1; }
+}
+
+.efficiency-hint {
+  color: rgba(255, 200, 100, 0.8) !important;
 }
 
 .actions-grid {

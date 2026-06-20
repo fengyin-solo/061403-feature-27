@@ -34,6 +34,10 @@
           />
           <ResourcePanel 
             :heat="heat"
+            :hunger="hunger"
+            :hunger-level="hungerLevel"
+            :hunger-label="hungerLabel"
+            :is-digesting="isDigesting"
             :wood="wood"
             :food="food"
             :hide="hide"
@@ -65,6 +69,9 @@
             :canCraft="wood >= 2 && hide >= 1"
             :huntRate="huntSuccessRate"
             :food="food"
+            :hunger-level="hungerLevel"
+            :action-efficiency="actionEfficiency"
+            :temp-cost-multiplier="tempCostMultiplier"
             @chop="handleChop"
             @hunt="handleHunt"
             @craft="handleCraft"
@@ -112,6 +119,12 @@ const {
   food,
   hide,
   tools,
+  hunger,
+  hungerLevel,
+  hungerLabel,
+  actionEfficiency,
+  tempCostMultiplier,
+  isDigesting,
   isDay,
   isNight,
   dayCount,

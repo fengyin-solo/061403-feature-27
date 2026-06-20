@@ -7,27 +7,75 @@ export function useGame() {
   const food = ref(5)
   const hide = ref(0)
   const tools = ref(0)
+  const hunger = ref(0)
   const isDay = ref(true)
   const dayCount = ref(1)
   const isBlizzard = ref(false)
   const gameOver = ref(false)
   const gameOverReason = ref('')
   const actionLog = ref([])
+  const digestionQueue = ref([])
 
   const DAY_DURATION = 30000
   const NIGHT_DURATION = 20000
   const HEAT_CONSUMPTION_RATE = 2
   const BLIZZARD_CHANCE = 0.15
+  const HUNGER_DAY_RATE = 0.8
+  const HUNGER_NIGHT_RATE = 1.5
+  const DIGESTION_INTERVAL = 2000
+  const DIGESTION_AMOUNT = 5
+  const FOOD_DIGESTION_STEPS = 4
 
   let dayNightTimer = null
   let nightConsumptionTimer = null
   let autoSaveTimer = null
+  let hungerTimer = null
+  let digestionTimer = null
 
   const isNight = computed(() => !isDay.value)
   const isDanger = computed(() => temperature.value < 30)
   const canMakeFire = computed(() => wood.value >= 3)
   const canHunt = computed(() => tools.value > 0)
   const huntSuccessRate = computed(() => 0.3 + tools.value * 0.15)
+
+  const hungerLevel = computed(() => {
+    if (hunger.value < 20) return 'full'
+    if (hunger.value < 50) return 'hungry'
+    if (hunger.value < 80) return 'very_hungry'
+    return 'starving'
+  })
+
+  const hungerLabel = computed(() => {
+    const labels = {
+      full: '饱食',
+      hungry: '饥饿',
+      very_hungry: '非常饥饿',
+      starving: '极度饥饿'
+    }
+    return labels[hungerLevel.value]
+  })
+
+  const actionEfficiency = computed(() => {
+    const multipliers = {
+      full: 1.0,
+      hungry: 0.9,
+      very_hungry: 0.75,
+      starving: 0.5
+    }
+    return multipliers[hungerLevel.value]
+  })
+
+  const tempCostMultiplier = computed(() => {
+    const multipliers = {
+      full: 1.0,
+      hungry: 1.1,
+      very_hungry: 1.25,
+      starving: 1.5
+    }
+    return multipliers[hungerLevel.value]
+  })
+
+  const isDigesting = computed(() => digestionQueue.value.length > 0)
 
   function addLog(message, type = 'info') {
     const timestamp = new Date().toLocaleTimeString()
@@ -43,9 +91,83 @@ export function useGame() {
       gameOverReason.value = '体温过低，你在严寒中失去了意识...'
       stopTimers()
       addLog('游戏结束：体温过低！', 'danger')
+      return
+    }
+    if (hunger.value >= 100) {
+      gameOver.value = true
+      gameOverReason.value = '你因长期饥饿而体力耗尽，倒在了雪地中...'
+      stopTimers()
+      addLog('游戏结束：饥饿致死！', 'danger')
+      return
     }
     if (temperature.value >= 100) {
       temperature.value = 100
+    }
+  }
+
+  function increaseHunger() {
+    if (gameOver.value) return
+
+    const rate = isDay.value ? HUNGER_DAY_RATE : HUNGER_NIGHT_RATE
+    const multiplier = isBlizzard.value ? 1.5 : 1
+    const increase = rate * multiplier
+
+    const oldLevel = hungerLevel.value
+    hunger.value = Math.min(100, hunger.value + increase)
+    const newLevel = hungerLevel.value
+
+    if (oldLevel !== newLevel) {
+      if (newLevel === 'hungry') {
+        addLog('你感到有些饥饿，行动效率开始下降...', 'warning')
+      } else if (newLevel === 'very_hungry') {
+        addLog('你非常饥饿，体温流失加快！', 'warning')
+      } else if (newLevel === 'starving') {
+        addLog('⚠️ 你已极度饥饿，再不进食将有生命危险！', 'danger')
+      }
+    }
+
+    if (hungerLevel.value === 'starving') {
+      temperature.value = Math.max(0, temperature.value - 0.5)
+    }
+
+    checkGameOver()
+  }
+
+  function processDigestion() {
+    if (gameOver.value || digestionQueue.value.length === 0) return
+
+    const item = digestionQueue.value[0]
+    if (item.remainingSteps > 0) {
+      const reduction = DIGESTION_AMOUNT
+      hunger.value = Math.max(0, hunger.value - reduction)
+      item.remainingSteps--
+
+      if (item.remainingSteps === 0) {
+        const tempBonus = Math.floor(Math.random() * 3) + 2
+        temperature.value = Math.min(100, temperature.value + tempBonus)
+        addLog(`食物消化完成，体温恢复 ${tempBonus}`, 'success')
+        digestionQueue.value.shift()
+      }
+    } else {
+      digestionQueue.value.shift()
+    }
+
+    if (digestionQueue.value.length === 0) {
+      stopDigestion()
+    }
+  }
+
+  function startDigestion() {
+    if (digestionTimer) return
+    digestionTimer = setInterval(() => {
+      processDigestion()
+    }, DIGESTION_INTERVAL)
+  }
+
+  function stopDigestion() {
+    if (digestionTimer) {
+      clearInterval(digestionTimer)
+      digestionTimer = null
     }
   }
 
@@ -74,6 +196,8 @@ export function useGame() {
     nightConsumptionTimer = setInterval(() => {
       consumeHeat()
     }, 1000)
+
+    startHungerTimer()
     
     if (Math.random() < BLIZZARD_CHANCE) {
       triggerBlizzard()
@@ -87,6 +211,20 @@ export function useGame() {
     if (nightConsumptionTimer) {
       clearInterval(nightConsumptionTimer)
       nightConsumptionTimer = null
+    }
+  }
+
+  function startHungerTimer() {
+    if (hungerTimer) return
+    hungerTimer = setInterval(() => {
+      increaseHunger()
+    }, 1000)
+  }
+
+  function stopHungerTimer() {
+    if (hungerTimer) {
+      clearInterval(hungerTimer)
+      hungerTimer = null
     }
   }
 
@@ -107,14 +245,17 @@ export function useGame() {
   function chopWood() {
     if (gameOver.value || isNight.value) return
     
-    const multiplier = isBlizzard.value ? 2 : 1
-    const tempCost = 5 * multiplier
+    const blizzardMultiplier = isBlizzard.value ? 2 : 1
+    const hungerMultiplier = tempCostMultiplier.value
+    const tempCost = Math.round(5 * blizzardMultiplier * hungerMultiplier)
     
     temperature.value = Math.max(0, temperature.value - tempCost)
-    const woodGained = Math.floor(Math.random() * 3) + 2
+    const baseWood = Math.floor(Math.random() * 3) + 2
+    const woodGained = Math.max(1, Math.floor(baseWood * actionEfficiency.value))
     wood.value += woodGained
-    
-    addLog(`砍柴：获得 ${woodGained} 木头，消耗 ${tempCost} 体温`, 'action')
+
+    const efficiencyText = actionEfficiency.value < 1 ? ` (效率${Math.round(actionEfficiency.value * 100)}%)` : ''
+    addLog(`砍柴：获得 ${woodGained} 木头，消耗 ${tempCost} 体温${efficiencyText}`, 'action')
     
     if (Math.random() < BLIZZARD_CHANCE * 0.5) {
       triggerBlizzard()
@@ -126,17 +267,23 @@ export function useGame() {
   function hunt() {
     if (gameOver.value || isNight.value) return
     
-    const multiplier = isBlizzard.value ? 2 : 1
-    const tempCost = 8 * multiplier
+    const blizzardMultiplier = isBlizzard.value ? 2 : 1
+    const hungerMultiplier = tempCostMultiplier.value
+    const tempCost = Math.round(8 * blizzardMultiplier * hungerMultiplier)
     
     temperature.value = Math.max(0, temperature.value - tempCost)
     
-    if (Math.random() < huntSuccessRate.value) {
-      const foodGained = Math.floor(Math.random() * 3) + 2
-      const hideGained = Math.floor(Math.random() * 2) + 1
+    const adjustedSuccessRate = huntSuccessRate.value * actionEfficiency.value
+    
+    if (Math.random() < adjustedSuccessRate) {
+      const baseFood = Math.floor(Math.random() * 3) + 2
+      const baseHide = Math.floor(Math.random() * 2) + 1
+      const foodGained = Math.max(1, Math.floor(baseFood * actionEfficiency.value))
+      const hideGained = Math.max(1, Math.floor(baseHide * actionEfficiency.value))
       food.value += foodGained
       hide.value += hideGained
-      addLog(`狩猎成功：获得 ${foodGained} 食物，${hideGained} 兽皮，消耗 ${tempCost} 体温`, 'success')
+      const efficiencyText = actionEfficiency.value < 1 ? ` (效率${Math.round(actionEfficiency.value * 100)}%)` : ''
+      addLog(`狩猎成功：获得 ${foodGained} 食物，${hideGained} 兽皮，消耗 ${tempCost} 体温${efficiencyText}`, 'success')
     } else {
       addLog(`狩猎失败：消耗 ${tempCost} 体温，空手而归`, 'warning')
     }
@@ -155,15 +302,17 @@ export function useGame() {
       return
     }
     
-    const multiplier = isBlizzard.value ? 2 : 1
-    const tempCost = 6 * multiplier
+    const blizzardMultiplier = isBlizzard.value ? 2 : 1
+    const hungerMultiplier = tempCostMultiplier.value
+    const tempCost = Math.round(6 * blizzardMultiplier * hungerMultiplier)
     
     wood.value -= 2
     hide.value -= 1
     tools.value += 1
     temperature.value = Math.max(0, temperature.value - tempCost)
     
-    addLog(`制作工具：获得 1 工具，消耗 ${tempCost} 体温`, 'success')
+    const efficiencyText = tempCostMultiplier.value > 1 ? ` (消耗+${Math.round((tempCostMultiplier.value - 1) * 100)}%)` : ''
+    addLog(`制作工具：获得 1 工具，消耗 ${tempCost} 体温${efficiencyText}`, 'success')
     checkGameOver()
   }
 
@@ -188,10 +337,19 @@ export function useGame() {
     }
     
     food.value -= 1
-    const tempGained = Math.floor(Math.random() * 10) + 5
-    temperature.value = Math.min(100, temperature.value + tempGained)
+
+    const instantTemp = Math.floor(Math.random() * 3) + 1
+    temperature.value = Math.min(100, temperature.value + instantTemp)
     
-    addLog(`进食：体温恢复 ${tempGained}`, 'success')
+    digestionQueue.value.push({
+      remainingSteps: FOOD_DIGESTION_STEPS,
+      totalSteps: FOOD_DIGESTION_STEPS
+    })
+
+    const queueSize = digestionQueue.value.length
+    addLog(`进食：立即恢复 ${instantTemp} 体温，开始消化（队列中 ${queueSize} 份食物）`, 'success')
+
+    startDigestion()
   }
 
   function startTimers() {
@@ -202,6 +360,12 @@ export function useGame() {
     autoSaveTimer = setInterval(() => {
       saveGame('auto')
     }, 10000)
+
+    startHungerTimer()
+
+    if (digestionQueue.value.length > 0) {
+      startDigestion()
+    }
   }
 
   function stopTimers() {
@@ -217,6 +381,8 @@ export function useGame() {
       clearInterval(autoSaveTimer)
       autoSaveTimer = null
     }
+    stopHungerTimer()
+    stopDigestion()
   }
 
   function saveGame(slot = 'manual') {
@@ -227,6 +393,8 @@ export function useGame() {
       food: food.value,
       hide: hide.value,
       tools: tools.value,
+      hunger: hunger.value,
+      digestionQueue: digestionQueue.value,
       isDay: isDay.value,
       dayCount: dayCount.value,
       isBlizzard: isBlizzard.value,
@@ -251,6 +419,8 @@ export function useGame() {
       food.value = gameState.food
       hide.value = gameState.hide
       tools.value = gameState.tools
+      hunger.value = gameState.hunger || 0
+      digestionQueue.value = gameState.digestionQueue || []
       isDay.value = gameState.isDay
       dayCount.value = gameState.dayCount
       isBlizzard.value = gameState.isBlizzard
@@ -304,6 +474,8 @@ export function useGame() {
     food.value = 5
     hide.value = 0
     tools.value = 0
+    hunger.value = 0
+    digestionQueue.value = []
     isDay.value = true
     dayCount.value = 1
     isBlizzard.value = false
@@ -333,6 +505,13 @@ export function useGame() {
     food,
     hide,
     tools,
+    hunger,
+    hungerLevel,
+    hungerLabel,
+    actionEfficiency,
+    tempCostMultiplier,
+    isDigesting,
+    digestionQueue,
     isDay,
     isNight,
     dayCount,
